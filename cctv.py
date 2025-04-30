@@ -7,18 +7,28 @@ import numpy as np
 def euclidean(p1, p2):
     return np.linalg.norm(np.array(p1) - np.array(p2))
 
-# 모델 및 추적기 초기화
+def iou(box1, box2):
+    # box = [x1, y1, x2, y2]
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+    area1 = (box1[2]-box1[0]) * (box1[3]-box1[1])
+    area2 = (box2[2]-box2[0]) * (box2[3]-box2[1])
+    union_area = area1 + area2 - inter_area
+    return inter_area / union_area if union_area != 0 else 0
+
+# YOLO + DeepSORT 초기화
 model = YOLO("yolov8n.pt")
 tracker = DeepSort(max_age=80, n_init=1)
 
 video_path = "./video/video.mp4"
 cap = cv2.VideoCapture(video_path)
 fps = cap.get(cv2.CAP_PROP_FPS)
-
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
 out = None
 
-# CSV 초기화
 csv_file = "tracking_output.csv"
 with open(csv_file, "w", newline='') as f:
     writer = csv.writer(f)
@@ -26,13 +36,15 @@ with open(csv_file, "w", newline='') as f:
 
 frame_count = 0
 
-# ID 병합용 상태 저장
-last_seen = {}  # {alias_id: (x, y, last_frame)}
-id_alias_map = {}  # {raw_id: alias_id}
+# ID 병합용
+last_seen = {}         # alias_id: (x, y, frame)
+id_alias_map = {}      # raw_id → alias_id
 next_alias_id = 1
 
-DIST_THRESHOLD = 50  # 중심 좌표 거리
-FRAME_GAP = 30       # 최대 ID 연속 허용 프레임 간격
+DIST_THRESHOLD = 50
+FRAME_GAP = 30
+MIN_WIDTH = 30
+MIN_HEIGHT = 60
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -46,18 +58,39 @@ while cap.isOpened():
         h, w = frame.shape[:2]
         out = cv2.VideoWriter("output_annotated.avi", fourcc, fps, (w, h))
 
-    detections = model.predict(frame, conf=0.3)[0]
-    boxes = detections.boxes.xyxy.cpu().numpy()
-    classes = detections.boxes.cls.cpu().numpy()
-    confs = detections.boxes.conf.cpu().numpy()
+    # YOLO 감지
+    results = model.predict(frame, conf=0.3)[0]
+    boxes = results.boxes.xyxy.cpu().numpy()
+    classes = results.boxes.cls.cpu().numpy()
+    confs = results.boxes.conf.cpu().numpy()
 
-    input_dets = []
+    # 중복 제거 + 작거나 잘못된 감지 제거
+    valid_dets = []
     for i in range(len(boxes)):
         cls = int(classes[i])
-        if cls in [0, 2]:  # person, car
-            x1, y1, x2, y2 = boxes[i]
-            w, h = x2 - x1, y2 - y1
-            input_dets.append(([x1, y1, w, h], confs[i], cls))
+        if cls not in [0, 2]:
+            continue
+        x1, y1, x2, y2 = boxes[i]
+        w, h = x2 - x1, y2 - y1
+        if w < MIN_WIDTH or h < MIN_HEIGHT:
+            continue
+        duplicate = False
+        for j in range(len(valid_dets)):
+            existing_box = valid_dets[j][0]
+            if cls == valid_dets[j][2] and iou([x1, y1, x2, y2], existing_box) > 0.6:
+                if confs[i] < valid_dets[j][1]:
+                    duplicate = True
+                else:
+                    valid_dets.pop(j)
+                break
+        if not duplicate:
+            valid_dets.append(([x1, y1, x2, y2], confs[i], cls))
+
+    # DeepSORT 입력 변환
+    input_dets = []
+    for box, conf, cls in valid_dets:
+        x1, y1, x2, y2 = box
+        input_dets.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
 
     tracks = tracker.update_tracks(input_dets, frame=frame)
 
@@ -71,13 +104,12 @@ while cap.isOpened():
             cls = track.det_class
             x1, y1, x2, y2 = map(int, track.to_ltrb())
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-            now = (cx, cy)
 
-            # ID 병합 로직
+            # ID 병합
             if raw_id not in id_alias_map:
                 matched = False
                 for alias_id, (px, py, last_f) in last_seen.items():
-                    if frame_count - last_f < FRAME_GAP and euclidean(now, (px, py)) < DIST_THRESHOLD:
+                    if frame_count - last_f < FRAME_GAP and euclidean((cx, cy), (px, py)) < DIST_THRESHOLD:
                         id_alias_map[raw_id] = alias_id
                         matched = True
                         break
