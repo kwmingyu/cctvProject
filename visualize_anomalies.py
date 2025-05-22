@@ -82,6 +82,10 @@ for track_id, group in features_df.groupby("track_id"):
         idx += 1
 
 # === 영상 시각화 ===
+from collections import defaultdict
+
+dangerous_episode_count = defaultdict(int)
+dangerous_frame_flags = defaultdict(list)
 cap = cv2.VideoCapture(VIDEO_PATH)
 fps = cap.get(cv2.CAP_PROP_FPS)
 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -122,14 +126,22 @@ while True:
             count = persistence_count.get(tid, 0)
             if score >= 80:
                 count += 1
-            elif count > 0:
-                count -= 1  # 유예 조건으로 1회 감소
+                dangerous_frame_flags[tid].append(1)
+            else:
+                if count > 0:
+                    count -= 1
+                dangerous_frame_flags[tid].append(0)
+
+            if len(dangerous_frame_flags[tid]) >= 30:
+                if sum(dangerous_frame_flags[tid][-30:]) >= 10:
+                    dangerous_episode_count[tid] += 1
+                    dangerous_frame_flags[tid] = []
             persistence_count[tid] = count
 
             color = (0, 255, 0)
-            if count >= PERSISTENCE_THRESHOLD:
+            if dangerous_episode_count[tid] >= PERSISTENCE_THRESHOLD:
                 color = (0, 0, 255)
-                cv2.putText(frame, "danger", (cx - 80, cy - 50),
+                cv2.putText(frame, "Danger", (cx - 80, cy - 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             elif score >= 80:
                 color = (0, 0, 255)
