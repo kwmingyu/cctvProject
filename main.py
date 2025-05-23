@@ -140,6 +140,8 @@ def make_sequences(feature_csv, npy_path, sequence_length=30):
     X_train = np.array(sequences)
     np.save(npy_path, X_train)
 
+# (생략된 상단부: run_tracking, extract_features, make_sequences 등 동일)
+
 # ===== 4. 이상행동 학습 및 시각화 =====
 def detect_anomalies(video_path, X_path, feature_csv, track_csv, output_video, threshold=0.04):
     class LSTMAutoEncoder(nn.Module):
@@ -193,7 +195,7 @@ def detect_anomalies(video_path, X_path, feature_csv, track_csv, output_video, t
 
     lookup = {(a["track_id"], f): a["score"] for a in anomaly_data for f in range(a["start_frame"], a["end_frame"])}
     frame_idx = 0
-    last_display, persistence, flags = {}, defaultdict(int), defaultdict(list)
+    last_display, persistence = {}, defaultdict(int)
     while True:
         ret, frame = cap.read()
         if not ret: break
@@ -207,20 +209,20 @@ def detect_anomalies(video_path, X_path, feature_csv, track_csv, output_video, t
                     last_display[tid] = (score, frame_idx)
                 else:
                     score = prev
-                color = (0, 255, 0)
+
+                # 이상행동 감지 로직: 3회 이상 누적 시 위험 감지
                 if score >= 80:
-                    flags[tid].append(1)
                     persistence[tid] += 1
                 else:
-                    flags[tid].append(0)
-                    persistence[tid] = max(0, persistence[tid] - 1)
-                if len(flags[tid]) >= 30 and sum(flags[tid][-30:]) >= 10:
-                    color = (0, 0, 255)
-                    flags[tid] = []
-                elif score >= 80:
-                    color = (0, 0, 255)
+                    persistence[tid] = 0
+
+                if persistence[tid] >= 3:
+                    color = (0, 0, 255)  # 이상행동 (빨강)
                 elif score >= 50:
-                    color = (0, 165, 255)
+                    color = (0, 165, 255)  # 주의 (주황)
+                else:
+                    color = (0, 255, 0)  # 정상 (초록)
+
                 cv2.putText(frame, f"Score: {score:.1f}/100", (cx-50, cy-25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 cv2.rectangle(frame, (cx-30, cy-60), (cx+30, cy+60), color, 2)
             else:
