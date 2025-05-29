@@ -235,7 +235,8 @@ def detect_anomalies(video_path, X_path, feature_csv, track_csv, output_video, t
 
 # ===== 메인 실행 =====
 if __name__ == "__main__":
-    VIDEO_PATH = "./video/video.mp4"
+    import sys
+    VIDEO_PATH = sys.argv[1] if len(sys.argv) > 1 else "./video/video.mp4"
     TRACK_CSV = "tracking_output.csv"
     FEATURE_CSV = "track_features.csv"
     X_PATH = "X_train.npy"
@@ -245,3 +246,4 @@ if __name__ == "__main__":
     extract_features(TRACK_CSV, FEATURE_CSV)
     make_sequences(FEATURE_CSV, X_PATH)
     detect_anomalies(VIDEO_PATH, X_PATH, FEATURE_CSV, TRACK_CSV, OUTPUT_VIDEO)
+
